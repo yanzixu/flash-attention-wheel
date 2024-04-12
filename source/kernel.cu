@@ -16,17 +16,19 @@ void check(void *ref, void *data, int length)
 {
     T *p_ref = reinterpret_cast<T *>(ref);
     T *p_data = reinterpret_cast<T *>(data);
+    int count = 0;
     for (int i = 0; i < length; i++)
     {
         float locla_ref = static_cast<float>(p_ref[i]);
         float local_data = static_cast<float>(p_data[i]);
-        if (fabs(locla_ref - local_data) > 0.02f * fabs(locla_ref))
+        if (fabs(locla_ref - local_data) > 0.0001f + 0.02f * fabs(locla_ref))
         {
             printf("%d ref %f data %f \n", i, locla_ref, local_data);
+            count++;
             // return;
         }
     }
-    printf("suc \n");
+    printf("suc %d \n");
 }
 
 template <typename T>
@@ -142,7 +144,7 @@ void test_FA_fwd()
     static constexpr int kTILE_M = 128;
     static constexpr int kTILE_N = 32;
     dim3 block(128, 1, 1);
-    dim3 grid(128 / kTILE_M, kHEADS, kBATCH);
+    dim3 grid(kSEQ_LEN / kTILE_M, kHEADS, kBATCH);
     // FA_FWD_CONFIG::yan_trait<T, 128, 32, kHEADDIM, 4> trait;
     FA_FWD::kFA_Fwd<FA_FWD_CONFIG::yan_trait<T, kTILE_M, kTILE_N, kHEADDIM, 4>><<<grid, block>>>(param);
     cudaDeviceSynchronize();
@@ -156,7 +158,7 @@ void test_FA_fwd()
     cudaMemcpy(h_o, d_o, kO_SIZE, cudaMemcpyDeviceToHost);
     if (!DEBUG)
     {
-        check<T>(h_o_ref, h_o, kSEQ_LEN);
+        check<T>(h_o_ref, h_o, kSEQ_LEN * kHEADS * kHEADDIM);
     }
 
     cudaFree(d_qvk);

@@ -181,6 +181,7 @@ namespace FA_FWD
         // TODO: sequence iteration
         constexpr int kFirstKCount = size<2>(s2r_rQ);
         constexpr int kSecondCount = size<2>(s2r_rV);
+        copy(g2s_copy, g2s_gQ, g2s_sQ);
         clear(rO);
         // error :地址加减操作是针对 thr_copy，即地址是私有数据，与张量地址无关
         for (int it_N = 0; it_N < param.seq_len; it_N += kTileN, g2s_gK.data() = g2s_gK.data() + kTileN * param.qkv_token_stride, g2s_gV.data() = g2s_gV.data() + kTileN * param.qkv_token_stride)
@@ -188,7 +189,8 @@ namespace FA_FWD
             clear(rScores_MMA);
 
             // TODO: g2s copy
-            copy(g2s_copy, g2s_gQ, g2s_sQ); // load Q illegal addr access -> gird & block position fused
+            // load Q illegal addr access -> gird & block position fused
+
             copy(g2s_copy, g2s_gK, g2s_sK);
             cp_async_fence();
             cp_async_wait<0>();
@@ -205,8 +207,6 @@ namespace FA_FWD
                 copy(s2r_copy_K, s2r_sK(_, _, it_K), s2r_rK(_, _, it_K));
                 gemm(tiled_mma_first, rScores_MMA, rQ(_, _, it_K), rK(_, _, it_K), rScores_MMA);
             }
-            cp_async_wait<0>();
-            __syncthreads();
 
             // TODO:debug scores val
             {
@@ -286,6 +286,8 @@ namespace FA_FWD
             // }
 
             transfer_tensor_data(rScores_RC_View, rP_RC);
+            cp_async_wait<0>();
+            __syncthreads();
 
             // TODO: P * V
             for (int it_K = 0; it_K < kSecondCount; it_K++)
