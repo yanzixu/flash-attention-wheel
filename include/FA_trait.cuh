@@ -76,7 +76,8 @@ namespace FA_FWD_CONFIG
         using SMEM_LAYOUT_O = SMEM_LAYOUT_Q;
         using R2S_ATOM = Copy_Atom<UniversalCopy<float>, T>;
         using R2S_ATOM_TEST = Copy_Atom<DefaultCopy, T>;
-        using S2G_ATOM = Copy_Atom<DefaultCopy, T>;
+        // using S2G_ATOM = Copy_Atom<DefaultCopy, T>;
+        using S2G_ATOM = Copy_Atom<UniversalCopy<uint128_t>, T>;
         // TODO: s2g cp
         using S2G_COPY = decltype(make_tiled_copy(S2G_ATOM{},
                                                   Layout<Shape<Int<kTHreadsRows>, Int<kThreadsPerRow>>, Stride<Int<kThreadsPerRow>, _1>>{},

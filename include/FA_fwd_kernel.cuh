@@ -382,24 +382,30 @@ namespace FA_FWD
         // SHOW_TENSOR(rO_RC_View)
         // SHOW_TENSOR(rO_St)
 
+        // TODO: epilogue r2s declare
         auto sO = make_tensor(sQ.data(), typename Trait::SMEM_LAYOUT_O{});
         auto r2s_copy_O = make_tiled_copy_C(typename Trait::R2S_ATOM{}, tiled_mma_second);
         auto thr_r2s_copy_O = r2s_copy_O.get_slice(Id);
         auto r2s_rO = thr_r2s_copy_O.retile_S(rO_St);
         auto r2s_sO = thr_r2s_copy_O.partition_D(sO);
+        copy(r2s_copy_O, r2s_rO, r2s_sO);
+
         // TODO:test universal copy result tensor layout
         {
             // 这里不管使用128bit 还是 32bit的拷贝，切分出的张量结果都是一样的
             // tiled mma和copy atom是怎么工作的，为什么结果一致
             // auto r2s_copy_O_test = make_tiled_copy_C(typename Trait::R2S_ATOM_TEST{}, tiled_mma_second);
             // auto thr_r2s_copy_O_test = r2s_copy_O_test.get_slice(Id);
-            // auto test_sO = thr_r2s_copy_O_test.partition_D(sO);
+            // auto r2s_rO = thr_r2s_copy_O_test.retile_S(rO_St);
+            // auto r2s_sO = thr_r2s_copy_O_test.partition_D(sO);
+            // copy(r2s_copy_O_test, r2s_rO, r2s_sO);
             // SHOW(r2s_sO)
             // SHOW(test_sO)
         }
-        copy(r2s_copy_O, r2s_rO, r2s_sO);
+
         __syncthreads();
-        // TODO: epilogue s2g
+        // TODO: epilogue s2g declare
+        // perf：相关的tiled_copy和thr_copy在sync前后声明对性能无影响，从汇编看这部分计算在编译期完成
         typename Trait::S2G_COPY s2g_copy_O;
         auto thr_s2g_copy_O = s2g_copy_O.get_slice(Id);
         auto s2g_sO = thr_s2g_copy_O.partition_S(sO);
