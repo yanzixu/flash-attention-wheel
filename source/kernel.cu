@@ -21,14 +21,14 @@ void check(void *ref, void *data, int length)
     {
         float locla_ref = static_cast<float>(p_ref[i]);
         float local_data = static_cast<float>(p_data[i]);
-        if (fabs(locla_ref - local_data) > 0.0001f + 0.02f * fabs(locla_ref))
+        if (fabs(locla_ref - local_data) > 0.00006f + 0.01f * fabs(locla_ref))
         {
             printf("%d ref %f data %f \n", i, locla_ref, local_data);
             count++;
-            // return;
+            return;
         }
     }
-    printf("suc %d \n");
+    printf("suc %d \n", count);
 }
 
 template <typename T>
