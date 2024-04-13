@@ -181,23 +181,23 @@ namespace FA_FWD
         // TODO: sequence iteration
         constexpr int kFirstKCount = size<2>(s2r_rQ);
         constexpr int kSecondCount = size<2>(s2r_rV);
+        // TODO: g2s copy
+        // load Q illegal addr access -> gird & block position fused
         copy(g2s_copy, g2s_gQ, g2s_sQ);
+        copy(g2s_copy, g2s_gK, g2s_sK);
+        cp_async_fence();
         clear(rO);
         // error :地址加减操作是针对 thr_copy，即地址是私有数据，与张量地址无关
-        for (int it_N = 0; it_N < param.seq_len; it_N += kTileN, g2s_gK.data() = g2s_gK.data() + kTileN * param.qkv_token_stride, g2s_gV.data() = g2s_gV.data() + kTileN * param.qkv_token_stride)
+        for (int it_N = 0; it_N < param.seq_len; it_N += kTileN)
         {
             clear(rScores_MMA);
 
-            // TODO: g2s copy
-            // load Q illegal addr access -> gird & block position fused
-
-            copy(g2s_copy, g2s_gK, g2s_sK);
-            cp_async_fence();
             cp_async_wait<0>();
             __syncthreads();
 
             // copy(g2s_copyV, g2s_gV, g2s_sV);
             copy(g2s_copy, g2s_gV, g2s_sV);
+            g2s_gV.data() = g2s_gV.data() + kTileN * param.qkv_token_stride;
             cp_async_fence();
 
             // TODO: Q * Kt
@@ -288,6 +288,13 @@ namespace FA_FWD
             transfer_tensor_data(rScores_RC_View, rP_RC);
             cp_async_wait<0>();
             __syncthreads();
+            // TODO: matrix k g2s
+            if (it_N < (param.seq_len - kTileN))
+            {
+                g2s_gK.data() = g2s_gK.data() + kTileN * param.qkv_token_stride;
+                copy(g2s_copy, g2s_gK, g2s_sK);
+                cp_async_fence();
+            }
 
             // TODO: P * V
             for (int it_K = 0; it_K < kSecondCount; it_K++)
