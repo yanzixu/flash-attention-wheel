@@ -22,6 +22,8 @@ namespace FA_FWD
         int token_stride;
         int qkv_token_stride;
         int head_stride;
+
+        float scale;
     };
 
     template <typename Param>
@@ -66,7 +68,7 @@ namespace FA_FWD
         static constexpr int kHeadDim = Trait::kHeadDim;
 
         static constexpr float kSCALE = 0.08838f; // 1/(128^(1/2))
-        static constexpr float kSCALE_LOG2 = kSCALE * float(M_LOG2E);
+        float kSCALE_LOG2 = param.scale * float(M_LOG2E);
 
         // TODO: index redefine
         const int batchId = blockIdx.z;
@@ -104,24 +106,17 @@ namespace FA_FWD
         auto g2s_gV = thr_g2s_copy.partition_S(gV);
         auto g2s_sV = thr_g2s_copy.partition_D(sV);
 
-        // auto g2s_copyV = typename Trait::G2S_COPY_V{};
-        // auto thr_g2s_copyV = g2s_copyV.get_slice(Id);
-        // auto g2s_gV = thr_g2s_copyV.partition_S(gV);
-        // auto g2s_sV = thr_g2s_copyV.partition_D(sV);
-
         // TODO: tiled_mma_first construct
         auto tiled_mma_first = typename Trait::TILED_MMA_FIRST{};
         auto thr_tiled_mma_first = tiled_mma_first.get_slice(Id);
         auto rQ = thr_tiled_mma_first.partition_fragment_A(gQ);
         auto rK = thr_tiled_mma_first.partition_fragment_B(gK);
-        // SHOW_TENSOR(gQ)
 
         // TODO: construct row_col layout of scores matrix
         auto rScores_MMA = thr_tiled_mma_first.partition_fragment_C(make_tensor(Layout<Shape<Int<kTileM>, Int<kTileN>>>{}));
         static_assert(is_rmem<decltype(rScores_MMA)>::value, "rScores_MMA not reg");
         auto div_first = logical_divide(rScores_MMA.layout(), Shape<_2>{});
         static_assert(is_layout<decltype(div_first)>::value, "div_first not layout");
-        // SHOW(div_first)
         // 这里使用make_layout函数的嵌套，这里的get<1>(div_first) -> layout，因此构造出来的tensor stride和原来同步（虽然寄存器数组，因为本质是一个view，因此stride会影响实际计算结果）
         auto rScores_RC_View = make_tensor(rScores_MMA.data(), make_layout(make_layout(get<1>(get<0>(div_first)), get<1>(div_first)),
                                                                            make_layout(get<0>(get<0>(div_first)), get<2>(div_first)))); // 这里rP_fp32没打印出地址，但是实际上是一个view
@@ -135,9 +130,7 @@ namespace FA_FWD
         auto tmpL = rV.layout();
         auto rV_RC_View = make_tensor(rV.data(), make_layout(make_layout(get<1>(tmpL)),
                                                              make_layout(get<0>(tmpL), get<2>(tmpL))));
-        // SHOW(rV)
-        // SHOW(rV_RC_View)
-        // auto rO = thr_tiled_mma_second.partition_fragment_C(gO);
+
         auto rO = thr_tiled_mma_second.partition_fragment_C(make_tensor(Layout<Shape<Int<kTileM>, Int<kHeadDim>>>{}));
         auto div_2nd = logical_divide(rO.layout(), Shape<_2>{});
         auto rO_RC_View = make_tensor(rO.data(), make_layout(make_layout(get<1>(get<0>(div_2nd)), get<1>(div_2nd)),
@@ -195,7 +188,6 @@ namespace FA_FWD
             cp_async_wait<0>();
             __syncthreads();
 
-            // copy(g2s_copyV, g2s_gV, g2s_sV);
             copy(g2s_copy, g2s_gV, g2s_sV);
             g2s_gV.data() = g2s_gV.data() + kTileN * param.qkv_token_stride;
             cp_async_fence();
@@ -208,22 +200,9 @@ namespace FA_FWD
                 gemm(tiled_mma_first, rScores_MMA, rQ(_, _, it_K), rK(_, _, it_K), rScores_MMA);
             }
 
-            // TODO:debug scores val
-            {
-                // for (int m = 0; m < size<0>(rScores_RC_View); m++)
-                // {
-                //     for (int n = 0; n < size<1>(rScores_RC_View); n++)
-                //     {
-                //         rScores_RC_View(m, n) = rScores_RC_View(m, n) * kSCALE;
-                //     }
-                // }
-                // SHOW_TENSOR(rScores_RC_View)
-            }
-
             // TODO: online softmax
             if (it_N == 0)
             {
-                // SHOW_TENSOR(sV)
                 for (int m = 0; m < size<0>(rScores_RC_View); m++)
                 {
                     float cur_max = -INFINITY;
@@ -236,10 +215,10 @@ namespace FA_FWD
                     cur_max = max(cur_max, __shfl_xor_sync(0xffffffff, cur_max, 0x02));
                     rMax(m) = cur_max;
                     float local_sum = 0.f;
+                    float scale_max = cur_max * kSCALE_LOG2;
                     for (int n = 0; n < size<1>(rScores_RC_View); n++)
                     {
-                        // rScores_RC_View(m, n) = exp(rScores_RC_View(m, n) - cur_max);
-                        rScores_RC_View(m, n) = exp2f(kSCALE_LOG2 * (rScores_RC_View(m, n) - cur_max));
+                        rScores_RC_View(m, n) = exp2f(kSCALE_LOG2 * rScores_RC_View(m, n) - scale_max);
                         local_sum += rScores_RC_View(m, n);
                     }
                     rSum(m) = local_sum;
@@ -262,28 +241,18 @@ namespace FA_FWD
                     for (int n = 0; n < size<1>(rO_RC_View); n++)
                     {
                         rO_RC_View(m, n) = rO_RC_View(m, n) * scale;
-                        // rO_RC_View(m, n) = rO_RC_View(m, n) * exp2f(float(M_LOG2E) * (rMax(m) - cur_max));
-                        // rO_RC_View(m, n) = rO_RC_View(m, n) * exp((rMax(m) - cur_max));
                     }
                     rMax(m) = cur_max;
                     float local_sum = 0.f;
+                    float scale_max = cur_max * kSCALE_LOG2;
                     for (int n = 0; n < size<1>(rScores_RC_View); n++)
                     {
-                        rScores_RC_View(m, n) = exp2f(kSCALE_LOG2 * (rScores_RC_View(m, n) - cur_max));
+                        rScores_RC_View(m, n) = exp2f(kSCALE_LOG2 * rScores_RC_View(m, n) - scale_max);
                         local_sum += rScores_RC_View(m, n);
                     }
                     rSum(m) = rSum(m) * scale + local_sum;
                 }
             }
-
-            // 这里处理rO需要单独保存上次迭代的max 和 当前的max值
-            // for (int m = 0; m < size<0>(rO_RC_View); m++)
-            // {
-            //     for (int n = 0; n < size<1>(rO_RC_View); n++)
-            //     {
-            //         rO_RC_View(m, n) = rO_RC_View(m, n) * exp2f(float(M_LOG2E) * ())
-            //     }
-            // }
 
             transfer_tensor_data(rScores_RC_View, rP_RC);
             cp_async_wait<0>();
@@ -317,66 +286,6 @@ namespace FA_FWD
             }
         }
 
-        // TODO:debug
-        {
-            // g2s_gK.data() = g2s_gK.data() + (0 - 128) * param.qkv_token_stride;
-            // g2s_gV.data() = g2s_gV.data() + (0 - 128) * param.qkv_token_stride;
-            // clear(rO_RC_View);
-            // for (int it_N = 0; it_N < param.seq_len; it_N += kTileN, g2s_gK.data() = g2s_gK.data() + kTileN * param.qkv_token_stride, g2s_gV.data() = g2s_gV.data() + kTileN * param.qkv_token_stride)
-            // {
-            //     clear(rScores_MMA);
-
-            //     // TODO: g2s copy
-            //     copy(g2s_copy, g2s_gQ, g2s_sQ); // load Q illegal addr access -> gird & block position fused
-            //     copy(g2s_copy, g2s_gK, g2s_sK);
-            //     cp_async_fence();
-            //     cp_async_wait<0>();
-            //     __syncthreads();
-            //     copy(g2s_copy, g2s_gV, g2s_sV);
-            //     cp_async_fence();
-
-            //     // TODO: Q * Kt
-            //     for (int it_K = 0; it_K < kFirstKCount; it_K++)
-            //     {
-            //         copy(s2r_copy_Q, s2r_sQ(_, _, it_K), s2r_rQ(_, _, it_K));
-            //         copy(s2r_copy_K, s2r_sK(_, _, it_K), s2r_rK(_, _, it_K));
-            //         gemm(tiled_mma_first, rScores_MMA, rQ(_, _, it_K), rK(_, _, it_K), rScores_MMA);
-            //     }
-            //     cp_async_wait<0>();
-            //     __syncthreads();
-            //     // for (int m = 0; m < size<0>(rScores_RC_View); m++)
-            //     // {
-            //     //     for (int n = 0; n < size<1>(rScores_RC_View); n++)
-            //     //     {
-            //     //         rScores_RC_View(m, n) = rScores_RC_View(m, n) * kSCALE;
-            //     //     }
-            //     // }
-            //     // SHOW_TENSOR(rScores_RC_View)
-            //     for (int m = 0; m < size<0>(rScores_RC_View); m++)
-            //     {
-            //         float scale = 1.f / rSum(m);
-            //         for (int n = 0; n < size<1>(rScores_RC_View); n++)
-            //         {
-            //             rScores_RC_View(m, n) = exp2f(kSCALE_LOG2 * (rScores_RC_View(m, n) - rMax(m)));
-            //             rScores_RC_View(m, n) = rScores_RC_View(m, n) * scale;
-            //         }
-            //     }
-            //     // SHOW_TENSOR(rScores_RC_View)
-            //     transfer_tensor_data(rScores_RC_View, rP_RC);
-
-            //     // TODO: P * V
-            //     for (int it_K = 0; it_K < kSecondCount; it_K++)
-            //     {
-            //         // 这里每次load两倍的数据，在N方向上拓展，因此it_K做rV在K维度上的迭代索引没问题
-            //         copy(s2r_copy_V, s2r_sV(_, _, it_K), s2r_rV(_, _, it_K));
-            //         gemm(tiled_mma_second, rO, rP_MMA_View(_, _, it_K), rV(_, _, it_K), rO);
-            //     }
-            //     SHOW_TENSOR(rO_RC_View)
-            // }
-        }
-        // SHOW_TENSOR(rO_RC_View)
-        // SHOW_TENSOR(rSum)
-
         auto rO_St = make_tensor<T>(rO.layout());
         transfer_tensor_data(rO, rO_St);
         // SHOW_TENSOR(rO_RC_View)
@@ -394,13 +303,12 @@ namespace FA_FWD
         {
             // 这里不管使用128bit 还是 32bit的拷贝，切分出的张量结果都是一样的
             // tiled mma和copy atom是怎么工作的，为什么结果一致
+            // 使用DefaultCopy的测试程序，DefaultCopy使用16bit sts inst
             // auto r2s_copy_O_test = make_tiled_copy_C(typename Trait::R2S_ATOM_TEST{}, tiled_mma_second);
             // auto thr_r2s_copy_O_test = r2s_copy_O_test.get_slice(Id);
             // auto r2s_rO = thr_r2s_copy_O_test.retile_S(rO_St);
             // auto r2s_sO = thr_r2s_copy_O_test.partition_D(sO);
             // copy(r2s_copy_O_test, r2s_rO, r2s_sO);
-            // SHOW(r2s_sO)
-            // SHOW(test_sO)
         }
 
         __syncthreads();

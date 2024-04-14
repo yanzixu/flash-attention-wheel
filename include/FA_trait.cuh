@@ -75,7 +75,7 @@ namespace FA_FWD_CONFIG
         // TODO: r2s cp
         using SMEM_LAYOUT_O = SMEM_LAYOUT_Q;
         using R2S_ATOM = Copy_Atom<UniversalCopy<float>, T>;
-        using R2S_ATOM_TEST = Copy_Atom<DefaultCopy, T>;
+        // using R2S_ATOM_TEST = Copy_Atom<DefaultCopy, T>;
         // using S2G_ATOM = Copy_Atom<DefaultCopy, T>;
         using S2G_ATOM = Copy_Atom<UniversalCopy<uint128_t>, T>;
         // TODO: s2g cp

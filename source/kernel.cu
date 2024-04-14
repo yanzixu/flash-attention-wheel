@@ -140,6 +140,7 @@ void test_FA_fwd()
     param.d_K = reinterpret_cast<T *>(d_qvk) + kHEADS * param.head_stride;
     param.d_V = reinterpret_cast<T *>(d_qvk) + 2 * kHEADS * param.head_stride;
     param.d_O = d_o;
+    param.scale = 0.08838f;
     // TODO: construct launch config
     static constexpr int kTILE_M = 128;
     static constexpr int kTILE_N = 32;
